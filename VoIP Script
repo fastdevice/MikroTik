@@ -1,0 +1,462 @@
+##################################################################################################
+##################################################################################################
+##                                                                                                
+##     MikroTik EasyConfig Script v 1.2
+##                                                                                                
+##################################################################################################
+##################################################################################################
+
+##################################################################################################
+##################################################################################################
+##
+##     The purpose of this script is make the initial configuration of a MikroTik router more
+##     simple. This script is tailored to the needs of VOIP providers. It includes a queue tree
+##     to prioritize VOIP and a nested script that runs every 5 minutes to identify IP phones
+##     based off their MAC addresses. 
+##
+##     I hope you find this script useful!
+##     - Rick Guyton
+##     me@rguyton.com
+##     
+##     I'm releasing this script under the MIT license. I'd love to do more projects like this
+##     for the community. But, the family has to eat and all. So, if you find this useful, I'd
+##     appreciate it if you would make a donation in what ever amount you feel this script
+##     is worth to you or your company. But, none is required. Oh, and please let me know how
+##     many routers you end up using this on if you can. Mainly for bragging rights. :) Thanks!
+##
+##     BTC: 1DCkRRhSUDWLgWnhYEfUuvqsy9qV8A6gL9
+##     Paypal: me@rguyton.com
+##
+##################################################################################################
+##################################################################################################
+
+##################################################################################################
+##################################################################################################
+##
+##     The MIT License (MIT)
+##     
+##     Copyright (c) 2016 Richard F Guyton III
+##     
+##     Permission is hereby granted, free of charge, to any person obtaining a copy of this
+##     software and associated documentation files (the "Software"), to deal in the Software
+##     and associated documentation files (the "Software"), to deal in the Software without
+##     restriction, including without limitation the rights to use, copy, modify, merge,
+##     publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+##     persons to whom the Software is furnished to do so, subject to the following conditions:
+##     
+##     The above copyright notice and this permission notice shall be included in all copies or
+##     substantial portions of the Software.
+##     
+##     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+##     INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+##     PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+##     FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+##     OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+##     DEALINGS IN THE SOFTWARE.
+##
+##################################################################################################
+##################################################################################################
+
+##################################################################################################
+##################################################################################################
+##                                                                                                
+##     VERY IMPORTANT
+##     
+##     DO NOT USE THE FOLLOWING CHARACTERS WHILE SETTING YOUR
+##     VARIABLES BELOW OR YOUR SCRIPT WILL FAIL:
+##
+##     - Dollar Sign Character
+##     - Double Quote Character
+##     - Backslash Character
+##     - Question Mark Character
+##
+##     If you cannot avoid using one of these symbols, please reference the document below 
+##     so see how they can be used safely.
+##
+##     http://wiki.mikrotik.com/wiki/Manual:Scripting#Constant_Escape_Sequences
+##                                                                                                
+##################################################################################################
+##################################################################################################
+
+##################################################################################################
+##################################################################################################
+##                                                                                                
+##     Don't run this script without changing these variables!
+##                                                                                                
+##################################################################################################
+##################################################################################################
+
+## Router admin password
+## Please put password in quotes below
+:global AdminPassword "ChangeMe!ChangeMe!!!!!$[/system routerboard get serial-number ]"
+
+## WiFi WAP/WPA2 PSK (if WiFi interfaces are found)
+## Please put password in quotes below
+:global WiFiPSK "ChangeMe!!!ChangeMe!$[/system routerboard get serial-number ]"
+
+## Max Upload (Set this to 85%-95% of your ISP's promised upload speed)
+:global MaxUP 1M
+
+## Max Download (Set this to 85%-95% of your ISP's promised download speed)
+:global MaxDOWN 10M
+
+##################################################################################################
+##################################################################################################
+##                                                                                                
+##     Commonly Modified Variables
+##                                                                                                
+##################################################################################################
+##################################################################################################
+
+## IP of the router's LAN interface
+## example for a 192.168.1.0/24 network: 192.168.1.1 or 192.168.1.254
+:global LANRouterIP 192.168.1.1
+
+## The network IP of your LAN. This will be x.x.x.0 in a /24 (255.255.255.0) network.
+## example for a 192.168.1.0/24 network: 192.168.1.0
+:global LANNetwork 192.168.1.0
+
+## Subnet mask bits (no /)
+## example for a 255.255.255.0 aka /24 network: 24
+:global LANNetMask 24
+
+## First IP given out by DHCP server
+## example for a 192.168.1.0/24 network: 192.168.1.100
+:global DHCPStart 192.168.1.100
+
+## Max IP given out by DHCP server
+## example for a 192.168.1.0/24 network: 192.168.1.200
+:global DHCPEnd 192.168.1.200
+
+## DNS servers assigned by DHCP. (use a comma to seperate values)
+## Defaults are google DNS, Open DNS, Verisign DNS
+:global DHCPDnsServers 8.8.8.8,208.67.222.222,64.6.64.6
+
+## Wifi 2GHz SSID
+:global WiFiSSID2ghz "Mikrotik$[:pick [/system routerboard get serial-number ] {[:len [/system routerboard get serial-number ]] - 4} [:len [/system routerboard get serial-number ]] ]"
+
+## Wifi 5GHz SSID
+:global WiFiSSID5ghz "Mikrotik$[:pick [/system routerboard get serial-number ] {[:len [/system routerboard get serial-number ]] - 4} [:len [/system routerboard get serial-number ]] ]_5Ghz"
+
+##################################################################################################
+##################################################################################################
+##                                                                                                
+##     Rarly Modified Variables
+##                                                                                                
+##################################################################################################
+##################################################################################################
+
+## Should the script enable the DHCP server
+## If so, make this variable "true" (without the quotes). Otherwise, please set it to "false" (without the quotes)
+:global DHCPEnabled true
+
+## Should the script attempt to detect and configure wireless interfaces on this box
+## If so, make this variable "true" (without the quotes). Otherwise, please set it to "false" (without the quotes)
+:global AttemptWifiConfig true
+
+## Should the script set the master port of each interface to LANInf (excluding WANInf)
+## Said another way, would we make the remaining ports act like a switch as many SOHO routers do
+## Again, with the true or false thing
+:global MasterPortConfig true
+
+## WAN Interface
+:global WANInf ether1
+
+## LAN Interface
+:global LANInf ether2
+
+## The band to use for 2ghz Wifi
+:global 2ghzband 2ghz-b/g/n
+
+## The band to use for 5ghz Wifi
+:global 5ghzband 5ghz-a/n/ac
+
+##################################################################################################
+##################################################################################################
+##################################################################################################
+##################################################################################################
+####                                                                                                
+####     If you make a modification below and it works well for you, please let me know!
+####     Don't make modifications below for production equipt unless you have tested thoroughly!
+####                                                                                                
+##################################################################################################
+##################################################################################################
+##################################################################################################
+##################################################################################################
+
+##     Set $WANInf (set above) to WAN, $LANInf (set above) to LAN and assign all other ports as slaves to $LANInf
+/interface ethernet
+set [ find default-name=$WANInf ] comment=WAN
+set [ find default-name=$LANInf ] comment=LAN
+
+## If $MasterPortConfig is true, take all remaining interfaces on the same switch as $LANInf and make them slaves of $LANInf
+:if ($MasterPortConfig) do={
+     ## Find the switch for the LANInf
+     :global LanInfSwitch [/interface ethernet switch port get [/interface ethernet switch port find name=$LANInf] switch]
+
+     ## For all ports on the same switch as LANInf, excluding the LANInf itself, the WANInf and any CPU interfaces
+     ## assign them to slaves to the LANInf
+     :foreach p in [/interface ethernet switch port find (!(name=$LANInf) && !(name=$WANInf) && !( name~"cpu")) && switch=$LanInfSwitch ] do={
+          set [ find default-name=[/interface ethernet switch port get $p name] ] master-port=$LANInf
+     }
+}
+
+:if ($DHCPEnabled) do={
+     ##     Setup DHCP Pool
+    /ip pool
+    add name=LAN_DHCP_POOL ranges="$DHCPStart-$DHCPEnd"
+
+    ##     Setup DHCP Server
+    /ip dhcp-server
+     add address-pool=LAN_DHCP_POOL disabled=no interface=$LANInf name=LAN_DHCP
+     /ip dhcp-server network
+     add address="$LANNetwork/$LANNetMask" dns-server=$DHCPDnsServers gateway=$LANRouterIP netmask=$LANNetMask
+}
+
+##     Setup DHCP client on $WANInf (WAN)
+/ip dhcp-client
+add add-default-route=yes dhcp-options=hostname,clientid disabled=no interface=$WANInf
+
+##     Setup LAN router ip on $LANInf
+##     We'll use the DHCPInf to bind to the correct interface incase this is a WiFi system
+/ip address
+add address="$LANRouterIP/$LANNetMask" comment="Internal LAN" interface=$LANInf network=$LANNetwork
+
+##     Setup NAT masquerade for LAN
+
+/ip firewall nat add chain=srcnat out-interface=$WANInf action=masquerade comment="Masquerade"
+
+##     Setup default firewall rules
+
+/ip firewall {
+filter add chain=input action=accept protocol=icmp comment="Accept ICMP"
+filter add chain=input action=accept connection-state=established,related comment="Accept Established/Related Input"
+filter add chain=input action=drop in-interface=$WANInf comment="Drop WAN Traffic"
+filter add chain=forward action=accept connection-state=established,related comment="Accept Established/Related Fwd"
+filter add chain=forward action=drop connection-state=invalid comment="Drop Invalid FWD"
+filter add chain=forward action=drop connection-state=new connection-nat-state=!dstnat in-interface=$WANInf comment="Drop all FWD from WAN that is not DSTNATed"
+}
+
+##     Disable remote access stuff
+
+/ip neighbor discovery set [find name="$WANInf"] discover=no
+/tool mac-server disable [find];
+/tool mac-server mac-winbox disable [find];
+:foreach k in=[/interface find where !(slave=yes  || name~"$WANInf")] do={
+:local tmpName [/interface get $k name];
+/tool mac-server add interface=$tmpName disabled=no;
+/tool mac-server mac-winbox add interface=$tmpName disabled=no;
+}
+
+/ip firewall mangle
+add action=mark-packet chain=forward comment="EXEMPT - Internal Net Traffic" dst-address-list="Local LANs" new-packet-mark=EXEMPT src-address-list="Local LANs"
+add action=mark-connection chain=forward new-connection-mark=EXEMPT-Internal packet-mark=EXEMPT passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_DNL - DNS" in-interface=ether1 new-packet-mark=PRIO1-DNL port=53 protocol=udp
+add action=mark-connection chain=forward new-connection-mark=PRIO1-DNS packet-mark=PRIO1-DNL passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_UPL - DNS" new-packet-mark=PRIO1_UPL port=53 protocol=udp
+add action=mark-connection chain=forward new-connection-mark=PRIO1-DNS packet-mark=PRIO1_UPL passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_DNL - ICMP" in-interface=ether1 new-packet-mark=PRIO1-DNL protocol=icmp
+add action=mark-connection chain=forward new-connection-mark=PRIO1-ICMP packet-mark=PRIO1-DNL passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_UPL - ICMP" new-packet-mark=PRIO1_UPL protocol=icmp
+add action=mark-connection chain=forward new-connection-mark=PRIO1-ICMP packet-mark=PRIO1_UPL passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_UPL - SYN" in-interface=ether1 new-packet-mark=PRIO1-UPL packet-size=0-123 protocol=tcp tcp-flags=syn passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_DNL - SYN" new-packet-mark=PRIO1-DNL packet-size=0-123 protocol=tcp tcp-flags=syn passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_UPL - ACK" in-interface=ether1 new-packet-mark=PRIO1-UPL packet-size=0-123 protocol=tcp tcp-flags=ack passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_DNL - ACK" new-packet-mark=PRIO1-DNL packet-size=0-123 protocol=tcp tcp-flags=ack passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_UPL - RST" in-interface=ether1 new-packet-mark=PRIO1-UPL packet-size=0-123 protocol=tcp tcp-flags=rst passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_DNL - RST" new-packet-mark=PRIO1-DNL packet-size=0-123 protocol=tcp tcp-flags=rst passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_UPL - FIN" in-interface=ether1 new-packet-mark=PRIO1-UPL packet-size=0-123 protocol=tcp tcp-flags=fin passthrough=no
+add action=mark-packet chain=forward comment="PRIO1_DNL - FIN" new-packet-mark=PRIO1-DNL packet-size=0-123 protocol=tcp tcp-flags=fin passthrough=no
+add action=mark-packet chain=forward comment="PRIO2_UPL - VOIP_Phones" new-packet-mark=PRIO2_UPL src-address-list=VOIP_Phones
+add action=mark-connection chain=forward new-connection-mark=PRIO2-VOIPPHONES packet-mark=PRIO2_UPL passthrough=no
+add action=mark-packet chain=forward comment="PRIO2_DNL - VOIP_Phones" dst-address-list=VOIP_Phones new-packet-mark=PRIO2-DNL
+add action=mark-connection chain=forward new-connection-mark=PRIO2-VOIPPHONES packet-mark=PRIO2-DNL passthrough=no
+add action=mark-packet chain=forward comment="This is unidentified traffic download traffic. Marked as PRIO5-DNL" in-interface=ether1 new-packet-mark=PRIO5-DNL
+add action=mark-connection chain=forward new-connection-mark=PRIO5-unidentified packet-mark=PRIO5-DNL passthrough=no
+add action=mark-packet chain=forward comment="This is unidentified traffic upload traffic. Marked as PRIO5-UPL" new-packet-mark=PRIO5_UPL out-interface=ether1
+add action=mark-connection chain=forward new-connection-mark=PRIO5-unidentified packet-mark=PRIO5_UPL passthrough=no
+
+
+##     Create Queue Trees (setup prio for traffic classes)
+
+/queue type
+add kind=sfq name=UPL
+add kind=sfq name=DNL
+
+/queue tree
+add max-limit=$MaxDOWN name=DNL_Queue_Max parent=global queue=DNL
+add max-limit=$MaxUP name=UPL_Queue_Max parent=global queue=UPL
+add name=PRIO1_UPL packet-mark=PRIO1_UPL parent=UPL_Queue_Max priority=1 queue=UPL
+add name=PRIO2_UPL packet-mark=PRIO2_UPL parent=UPL_Queue_Max priority=2 queue=UPL
+add name=PRIO3_UPL packet-mark=PRIO3_UPL parent=UPL_Queue_Max priority=3 queue=UPL
+add name=PRIO4_UPL packet-mark=PRIO4_UPL parent=UPL_Queue_Max priority=4 queue=UPL
+add name=PRIO5_UPL packet-mark=PRIO5_UPL parent=UPL_Queue_Max priority=5 queue=UPL
+add name=PRIO6_UPL packet-mark=PRIO6_UPL parent=UPL_Queue_Max priority=6 queue=UPL
+add name=PRIO7_UPL packet-mark=PRIO7_UPL parent=UPL_Queue_Max priority=7 queue=UPL
+add name=PRIO8_UPL packet-mark=PRIO8_UPL parent=UPL_Queue_Max queue=UPL
+add name=PRIO1_DNL packet-mark=PRIO1-DNL parent=DNL_Queue_Max priority=1 queue=DNL
+add name=PRIO2_DNL packet-mark=PRIO2-DNL parent=DNL_Queue_Max priority=2 queue=DNL
+add name=PRIO3_DNL packet-mark=PRIO3-DNL parent=DNL_Queue_Max priority=3 queue=DNL
+add name=PRIO4_DNL packet-mark=PRIO4-DNL parent=DNL_Queue_Max priority=4 queue=DNL
+add name=PRIO5_DNL packet-mark=PRIO5-DNL parent=DNL_Queue_Max priority=5 queue=DNL
+add name=PRIO6_DNL packet-mark=PRIO6-DNL parent=DNL_Queue_Max priority=6 queue=DNL
+add name=PRIO7_DNL packet-mark=PRIO7-DNL parent=DNL_Queue_Max priority=7 queue=DNL
+add name=PRIO8_DNL packet-mark=PRIO8-DNL parent=DNL_Queue_Max queue=DNL
+
+##     Install, run & schedule helper scripts
+
+/system script
+add name=VOIP_PHONES policy=read,write source="########################################################################################\
+    ##########\r\
+    \n##                                                                                                \r\
+    \n##     VOIP Phone Identification and Listing Script                                               \r\
+    \n##                                                                                                \r\
+    \n##################################################################################################\r\
+    \n##################################################################################################\r\
+    \n##                                                                                                \r\
+    \n##     The purpose of this script is to create a list of VOIP phones on the network to use for    \r\
+    \n##     prioritization. The script identifies phones based on the first 6 characters (8 including  \r\
+    \n##     the colons) of devices in the ARP table. This allows us to identify device regardless the  \r\
+    \n##     protocols being used or method of addressing (DHCP or static). It also prevents           \r\
+    \n##     re-configuration that may need to be done if the VOIP service IPs change.                  \r\
+    \n##                                                                                                \r\
+    \n##     However, there are two potential issues with this approach. First, is MAC spoofing. If an  \r\
+    \n##     end user were to spoof their MAC with one matching a pattern in this script, they could    \r\
+    \n##     get inappropriate prioritization. Secondly, manufactures that produce multiple types of    \r\
+    \n##     devices. For example, if you were to prioritize the Cisco/Linksys MACs, you could          \r\
+    \n##     inadvertently prioritize any PC with a Linksys NIC as well as Cisco/Linksys phones. It is  \r\
+    \n##     possible that these manufacturers use separate ranges for different types of devices, but  \r\
+    \n##     we have not been able to confirm this. If you have any information on this, I\92d greatly    \r\
+    \n##     appreciate feedback.                                                                       \r\
+    \n##                                                                                                \r\
+    \n##     I hope you find this script useful!                                                        \r\
+    \n##     - Rick Guyton                                                                              \r\
+    \n##     me@rguyton.com                                                                             \r\
+    \n##                                                                                                \r\
+    \n##################################################################################################\r\
+    \n\r\
+    \n##################################################################################################\r\
+    \n##                                                                                                \r\
+    \n##     Here we setup a function to ID MAC prefixes we are interested in.                          \r\
+    \n##                                                                                                \r\
+    \n##################################################################################################\r\
+    \n\r\
+    \n:global IsMACInteresting do={\r\
+    \n###### Add new prefixes here !!!\r\
+    \n###### 00:15:65 & 80:5E:C0 are for Yealink\r\
+    \n###### 64:16:7F & 00:04:F2 are for Polycom\r\
+    \n###### 00:0B:82 is for Grandstream\r\
+    \n     :local InterestingPrefixes {\"00:15:65\";\"80:5E:C0\";\"64:16:7F\";\"00:04:F2\"; \"00:0B:82\"}\r\
+    \n\r\
+    \n###### I don't want to strip out the first 8 characters of the MAC every time.\r\
+    \n###### Lets do it once and set a local\r\
+    \n     :local MyMACPrefix [:pick \$fullmac 0 8]\r\
+    \n     :local MACFlagged false\r\
+    \n     :foreach Prefix in=\$InterestingPrefixes do={\r\
+    \n          :if (\$MyMACPrefix = \$Prefix) do={ :set \$MACFlagged true }\r\
+    \n     }\r\
+    \n     :return \$MACFlagged\r\
+    \n}\r\
+    \n\r\
+
+    \n##################################################################################################\r\
+    \n##                                                                                                \r\
+    \n##     Here we check all of the existing list entries and make sure they are still valid.         \r\
+    \n##                                                                                                \r\
+    \n##################################################################################################\r\
+    \n\r\
+    \n:foreach ListItem in=[ /ip firewall address-list find list=VOIP_Phones] do={\r\
+    \n###### Gets the IP of this list entry and sets a local var\r\
+    \n/ip firewall address-list\r\
+    \n:local MyIP [get \$ListItem address]\r\
+    \n###### Well, first lets make sure there's still an ARP entry at all for this IP\r\
+    \n:if ([:len [/ip arp find address=\$MyIP]] = 0) do={\r\
+    \n###### If there's no ARP entry, rip it out of the list\r\
+    \n          /ip firewall address-list remove [/ip firewall address-list find list=VOIP_Phones address=\$MyIP]\r\
+    \n     } else={\r\
+    \n###### Ok, lets make sure that the ARP table still has a MAC we are interested in\r\
+    \n     /ip arp\r\
+    \n     :if ([\$IsMACInteresting fullmac=[get [/ip arp find address=\$MyIP] mac-address]] = false) do={\r\
+    \n###### Delete if the MAC isn't an interesting one anymore...\r\
+    \n               /ip firewall address-list remove [/ip firewall address-list find list=VOIP_Phones address=\$MyIP]\r\
+    \n          }\r\
+    \n     }\r\
+    \n}\r\
+    \n\r\
+    \n##################################################################################################\r\
+    \n##                                                                                                \r\
+    \n##     Now that we've verified all items already in the list, lets see if there are any more      \r\
+    \n##     devices in the ARP table that we should add.                                               \r\
+    \n##                                                                                                \r\
+    \n##################################################################################################\r\
+    \n\r\
+    \n/ip arp\r\
+    \n:foreach ArpEntry in=[ /ip arp find ] do={\r\
+    \n###### Gets the IP address for this ARP entry\r\
+    \n     :local MyIP [get \$ArpEntry address]\r\
+    \n###### Checks to see if the IP for this ARP entry is already in our list\r\
+    \n     :if ([:len [/ip firewall address-list find list=VOIP_Phones address=\$MyIP]] = 0) do={\r\
+    \n###### Guess not, lets see if we want to add it. Does the MAC prefix for this entry intrest us\?  \r\
+    \n          :if ([\$IsMACInteresting fullmac=[get \$ArpEntry mac-address]]) do={\r\
+    \n###### Yep, ok, add it!\r\
+    \n               /ip firewall address-list add list=VOIP_Phones address=\$MyIP  \r\
+    \n          }\r\
+    \n     }\r\
+    \n}"
+
+/system scheduler
+add interval=5m name=VOIP_Phones_Sched on-event="/system script run VOIP_PHONES" policy=read,write start-date=jan/01/2016 start-time=18:31:44
+
+/system script run VOIP_PHONES
+
+## Set Admin Password
+/user set admin password=$AdminPassword
+
+##################################################################################################
+##################################################################################################
+##
+##     WiFi Config
+##
+##################################################################################################
+##################################################################################################
+
+
+:if ($AttemptWifiConfig) do={
+     ## Detect WiFi interfaces. If none are found after a minute, log and quit
+     :local TimeTracker 0;
+     :local abort false;
+     :while ([:len [/interface find type="wlan"]] = 0 && ($TimeTracker < 60)) do={
+
+          :delay 5s
+          :set $TimeTracker ($TimeTracker + 5)
+     }
+     :if ([:len [/interface find type="wlan"]] = 0) do={
+/system script
+add name=WiFiConf owner=admin policy=read,write source=":put \"NoWifi\""
+} else={
+/system script
+add name=WiFiConf owner=admin policy=read,write source="/interface wireless security-profiles\r\
+    \nadd authentication-types=wpa-psk,wpa2-psk eap-methods=\"\" management-protection=allowed mode=dynamic-keys name=AutoSec supplicant-identity=\"\" wpa-pre-shared-key=$WiFiPSK wpa2-pre-shared-key=$WiFiPSK\r\
+    \n\r\
+    \n/interface wireless\r\
+    \nset [ /interface wireless find band~\"2ghz\" ] band=$2ghzband disabled=no distance=indoors frequency=auto mode=ap-bridge security-profile=AutoSec ssid=$WiFiSSID2ghz wireless-protocol=802.11\r\
+    \nset [ /interface wireless find band~\"5ghz\" ] band=$5ghzband disabled=no distance=indoors frequency=auto mode=ap-bridge security-profile=AutoSec ssid=$WiFiSSID5ghz wireless-protocol=802.11\r\
+    \n\r\
+    \n/interface bridge\r\
+    \nadd auto-mac=no admin-mac=[/interface ethernet get [find default-name=$LANInf] mac-address ] comment=WiFi-LAN-Bridge protocol-mode=rstp name=bridge\r\
+    \n\r\
+    \n## If DHCP Server is configured, and WiFi is being configured as well, change the binding from the LAN inferface to the bridge\r\
+    \n:if ($DHCPEnabled) do={\r\
+    \n     /ip dhcp-server\r\
+    \n     set LAN_DHCP interface=bridge\r\
+    \n}\r\
+    \n\r\
+    \n/ip address set [/ip address find network=$LANNetwork] interface=bridge\r\
+    \n\r\
+    \n/interface bridge port\r\
+    \n:foreach i in=[/interface find type=\"wlan\"] do={/interface bridge port add bridge=bridge interface=\$i}\r\
+    \nadd bridge=bridge interface=$LANInf"
+     }
+/system script run WiFiConf
+/system script remove WiFiConf
+}
